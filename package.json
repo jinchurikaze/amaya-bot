@@ -1,0 +1,25 @@
+{
+  "name": "amaya",
+  "version": "1.0.0",
+  "description": "Multi-purpose Discord bot with order queue and Roblox game pass scanning",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "roblox",
+    "queue"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.5",
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.3.1",
+    "mongoose": "^9.1.6"
+  }
+}
