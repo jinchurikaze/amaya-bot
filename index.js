@@ -4,6 +4,23 @@ const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
+// ================= KEEP ALIVE SERVER FOR REPLIT =================
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('✅ Bot is running!');
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'alive', timestamp: new Date() });
+});
+
+app.listen(3000, () => {
+  console.log('🌐 Server is ready on port 3000');
+});
+// ================================================================
+
 // Connect to MongoDB
 require('./database');
 
