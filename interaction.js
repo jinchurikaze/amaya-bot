@@ -1,4 +1,4 @@
-const Order = require("../models/order");
+const Order = require("./models/order");
 
 module.exports = async (interaction) => {
   if (!interaction.isButton()) return;
