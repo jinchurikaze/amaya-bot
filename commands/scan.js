@@ -127,7 +127,7 @@ async function runScanFromText(linkOrId) {
 
     const robuxEmoji = process.env.ROBUX_EMOJI_ID
       ? `<:robux:${process.env.ROBUX_EMOJI_ID}>`
-      : "<:maya_rbx:1470302406813286471>";
+      : "<:maya_rbx:1479848567479734283>";
 
     const priceFormatted = Number(finalPrice).toLocaleString();
     const payoutFormatted = Number(payout).toLocaleString();

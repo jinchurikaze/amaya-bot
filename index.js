@@ -1,8 +1,11 @@
-// index.js (UPDATED SAFE VERSION)
+// index.js
+// UPDATED VERSION
 // ✅ uses BOT_TOKEN from environment variables
 // ✅ logs token debug info
 // ✅ only logs in once
 // ✅ keeps your scan features
+// ✅ reply-based "scan" now uses commands/scan.js logic
+// ✅ adds sticky message auto-repost support for slash commands
 
 require("dotenv").config();
 
@@ -20,10 +23,12 @@ app.get("/health", (req, res) =>
 );
 
 app.listen(3000, () => console.log("🌐 Server is ready on port 3000"));
-// =====================================================
 
-// Connect to MongoDB
+// ================= DATABASE =================
 require("./database");
+
+// ================= STICKY STORAGE =================
+const { loadStickyData, saveStickyData } = require("./stickyData");
 
 // ================= DISCORD CLIENT =================
 const client = new Client({
@@ -85,7 +90,7 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await command.execute(interaction);
   } catch (error) {
-    console.error(error);
+    console.error("Slash command error:", error);
 
     const errorMessage = {
       content: "❌ There was an error executing this command!",
@@ -93,131 +98,81 @@ client.on("interactionCreate", async (interaction) => {
     };
 
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(errorMessage);
+      await interaction.followUp(errorMessage).catch(() => {});
     } else {
-      await interaction.reply(errorMessage);
+      await interaction.reply(errorMessage).catch(() => {});
     }
   }
 });
 
 // ================= SCAN HELPERS =================
+// Reuse the logic from commands/scan.js so slash command and message scan
+// always behave the same.
+let scanCommand = null;
+try {
+  scanCommand = require("./commands/scan");
+} catch (err) {
+  console.error("❌ Failed to load ./commands/scan.js:", err);
+}
 
-// Extract a Game Pass ID from many formats
 function extractGamePassId(text) {
+  if (scanCommand && typeof scanCommand.extractGamePassId === "function") {
+    return scanCommand.extractGamePassId(text);
+  }
+
+  // fallback only if scan.js failed to load
   if (!text) return null;
   const s = String(text).trim();
 
   if (/^\d+$/.test(s)) return s;
 
-  const m1 = s.match(/game-pass\/(\d+)/i);
-  if (m1?.[1]) return m1[1];
+  const patterns = [
+    /game-pass\/(\d+)/i,
+    /gamepass\/(\d+)/i,
+    /game-passes\/(\d+)/i,
+    /\/passes\/(\d+)/i,
+    /\b(?:gp|gamepass|game-pass)\D*(\d{5,})\b/i,
+    /id=(\d+)/i,
+  ];
 
-  const m2 = s.match(/\b(?:gp|gamepass|game-pass)\D*(\d{5,})\b/i);
-  if (m2?.[1]) return m2[1];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m?.[1]) return m[1];
+  }
 
   return null;
 }
 
-// PH page price parsing (best-effort)
-async function fetchPHPagePrice(gamePassId) {
+async function handleScan(message, input) {
   try {
-    const res = await fetch(`https://www.roblox.com/game-pass/${gamePassId}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-PH,en;q=0.9",
-        Accept: "text/html",
-      },
-    });
-
-    if (!res.ok) return null;
-
-    const html = await res.text();
-
-    const patterns = [
-      /"price"\s*:\s*(\d+)/,
-      /"PriceInRobux"\s*:\s*(\d+)/,
-      /data-price\s*=\s*["'](\d+)["']/,
-    ];
-
-    for (const re of patterns) {
-      const m = html.match(re);
-      if (m?.[1]) return parseInt(m[1], 10);
+    if (!scanCommand || typeof scanCommand.runScan !== "function") {
+      return message.reply("❌ Scan command is not available right now.");
     }
 
-    return null;
-  } catch {
-    return null;
-  }
-}
+    const result = await scanCommand.runScan(input);
 
-async function handleScan(message, gamePassId) {
-  try {
-    const res = await fetch(
-      `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/product-info`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Accept: "application/json",
-        },
-      }
-    );
-
-    if (!res.ok) {
-      let reason = `Roblox API returned ${res.status}`;
-      if (res.status === 403) reason = "Forbidden (403) — blocked by Roblox.";
-      if (res.status === 429) reason = "Rate limited (429) — try again later.";
-      if (res.status === 404) {
-        reason = "Not found (404) — invalid/deleted/private pass.";
-      }
-
-      console.log("[SCAN] gamePassId:", gamePassId, "| status:", res.status);
-      return message.reply(`❌ Error fetching game pass info. (${reason})`);
+    if (!result?.ok) {
+      return message.reply(result?.content || "❌ Error fetching game pass info.");
     }
 
-    const data = await res.json();
-
-    const name = data?.Name || data?.name || "No name";
-    const apiPrice = data?.PriceInRobux ?? data?.priceInRobux ?? 0;
-
-    const phPrice = await fetchPHPagePrice(gamePassId);
-    const finalPrice = typeof phPrice === "number" ? phPrice : apiPrice;
-
-    const payout = finalPrice > 0 ? Math.floor(finalPrice * 0.7) : 0;
-    const cleanLink = `https://www.roblox.com/game-pass/${gamePassId}`;
-
-    const robuxEmoji = process.env.ROBUX_EMOJI_ID
-      ? `<:robux:${process.env.ROBUX_EMOJI_ID}>`
-      : "<:maya_rbx:1470302406813286471>";
-
-    const priceFormatted = Number(finalPrice).toLocaleString();
-    const payoutFormatted = Number(payout).toLocaleString();
-
-    const regionalLine =
-      phPrice !== null && phPrice !== apiPrice
-        ? "⚠️ **Regional pricing POSSIBLY ON (PH price differs)**"
-        : "✅ **Regional pricing likely OFF (PH matches base price)**";
-
-    const reply =
-      ` <${cleanLink}>\n` +
-      ` Name: **${name}**\n` +
-      ` Price: **${priceFormatted}**\n` +
-      ` You will receive: **${payoutFormatted}** ${robuxEmoji}\n` +
-      ` ${regionalLine}`;
-
-    await message.reply(reply);
+    return message.reply(result.content);
   } catch (err) {
     console.error("Scan error:", err);
-    message.reply("❌ Error fetching game pass info.");
+    return message.reply("❌ Error fetching game pass info.");
   }
 }
 
 // ================= MESSAGE LISTENER =================
 const processedMessages = new Set();
+const stickyCooldowns = new Map();
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  let gamePassId = null;
+  // =========================
+  // SCAN FEATURE
+  // =========================
+  let scanInput = null;
 
   if (message.content.toLowerCase() === "scan" && message.reference) {
     try {
@@ -226,42 +181,89 @@ client.on("messageCreate", async (message) => {
       );
 
       if (replied.content) {
-        gamePassId = extractGamePassId(replied.content);
+        scanInput = replied.content;
       }
 
-      if (!gamePassId && replied.embeds?.length > 0) {
+      if (!scanInput && replied.embeds?.length > 0) {
         const embed = replied.embeds[0];
-        if (embed.url) gamePassId = extractGamePassId(embed.url);
-        if (!gamePassId && embed.description) {
-          gamePassId = extractGamePassId(embed.description);
-        }
-        if (!gamePassId && embed.title) {
-          gamePassId = extractGamePassId(embed.title);
-        }
+
+        if (embed.url) scanInput = embed.url;
+        if (!scanInput && embed.description) scanInput = embed.description;
+        if (!scanInput && embed.title) scanInput = embed.title;
       }
     } catch (err) {
       console.error("Reply fetch error:", err);
       return;
     }
   } else if (message.content.toLowerCase().startsWith("scan ")) {
-    gamePassId = extractGamePassId(message.content);
+    scanInput = message.content.slice(5).trim();
   }
 
-  if (!gamePassId) return;
+  if (scanInput) {
+    const gamePassId = extractGamePassId(scanInput);
 
-  if (processedMessages.has(message.id)) return;
-  processedMessages.add(message.id);
-  setTimeout(() => processedMessages.delete(message.id), 10000);
+    if (!gamePassId) {
+      return message.reply("❌ Invalid Roblox game pass link or ID.");
+    }
 
-  return handleScan(message, gamePassId);
+    if (processedMessages.has(message.id)) return;
+    processedMessages.add(message.id);
+    setTimeout(() => processedMessages.delete(message.id), 10000);
+
+    return handleScan(message, gamePassId);
+  }
+
+  // =========================
+  // STICKY FEATURE
+  // =========================
+  const stickyData = loadStickyData();
+  const sticky = stickyData[message.channel.id];
+
+  if (!sticky) return;
+
+  // ignore the sticky message itself so it doesn't loop
+  if (message.id === sticky.messageId) return;
+
+  // cooldown to reduce spam in active channels
+  const now = Date.now();
+  const lastStickyTime = stickyCooldowns.get(message.channel.id) || 0;
+
+  if (now - lastStickyTime < 3000) return;
+  stickyCooldowns.set(message.channel.id, now);
+
+  try {
+    // delete previous sticky
+    if (sticky.messageId) {
+      try {
+        const oldSticky = await message.channel.messages.fetch(sticky.messageId);
+        await oldSticky.delete().catch(() => {});
+      } catch (err) {
+        // previous sticky may already be deleted or missing
+      }
+    }
+
+    // send new sticky at bottom
+    const newSticky = await message.channel.send({
+      content: `${sticky.content}\n\n-# Sticky message set up by server admins.`,
+    });
+
+    stickyData[message.channel.id].messageId = newSticky.id;
+    saveStickyData(stickyData);
+  } catch (error) {
+    console.error("Sticky message error:", error);
+  }
 });
 
 // ================= LOGIN =================
 const token = process.env.BOT_TOKEN;
+
 console.log("TEST_VAR:", process.env.TEST_VAR);
-console.log("All env keys sample:", Object.keys(process.env).filter(k =>
-  ["BOT_TOKEN", "TEST_VAR", "MONGO_URI", "CLIENT_ID", "GUILD_ID"].includes(k)
-));
+console.log(
+  "All env keys sample:",
+  Object.keys(process.env).filter((k) =>
+    ["BOT_TOKEN", "TEST_VAR", "MONGO_URI", "CLIENT_ID", "GUILD_ID"].includes(k)
+  )
+);
 console.log("BOT_TOKEN exists:", token !== undefined);
 console.log("BOT_TOKEN type:", typeof token);
 console.log("BOT_TOKEN length:", token ? token.length : 0);
