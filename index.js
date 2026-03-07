@@ -1,31 +1,17 @@
-// index.js (FINAL UPDATED VERSION)
-// ✅ reply "scan" to a gamepass link works
-// ✅ "scan <link>" works
-// ✅ uses node-fetch (stable)
-// ✅ handles many gamepass link formats
-// ✅ PH price parsing + "regional pricing possibly on/off"
-// ✅ better error messages so you can see WHY it failed
+// index.js (UPDATED SAFE VERSION)
+// ✅ uses BOT_TOKEN from environment variables
+// ✅ logs token debug info
+// ✅ only logs in once
+// ✅ keeps your scan features
 
 require("dotenv").config();
-
-
-const token = process.env.BOT_TOKEN;
-
-if (!token) {
-  console.error("Missing BOT_TOKEN in environment variables.");
-  process.exit(1);
-}
-
-client.login(token).catch((err) => {
-  console.error("Login failed:", err.message);
-});
 
 const { Client, GatewayIntentBits, Collection } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
+const express = require("express");
 
 // ================= KEEP ALIVE SERVER =================
-const express = require("express");
 const app = express();
 
 app.get("/", (req, res) => res.send("✅ Bot is running!"));
@@ -121,14 +107,11 @@ function extractGamePassId(text) {
   if (!text) return null;
   const s = String(text).trim();
 
-  // plain numeric
   if (/^\d+$/.test(s)) return s;
 
-  // common /game-pass/<id>
   const m1 = s.match(/game-pass\/(\d+)/i);
   if (m1?.[1]) return m1[1];
 
-  // e.g. "gp 123456" or "gamepass:123456"
   const m2 = s.match(/\b(?:gp|gamepass|game-pass)\D*(\d{5,})\b/i);
   if (m2?.[1]) return m2[1];
 
@@ -167,12 +150,8 @@ async function fetchPHPagePrice(gamePassId) {
   }
 }
 
-// Updated scan function used by reply "scan" and "scan <link>"
-// ✅ COPY-PASTE THIS WHOLE handleScan() (replace your current one)
-
 async function handleScan(message, gamePassId) {
   try {
-    // ✅ More reliable endpoint (fixes your 404 problem)
     const res = await fetch(
       `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/product-info`,
       {
@@ -187,8 +166,9 @@ async function handleScan(message, gamePassId) {
       let reason = `Roblox API returned ${res.status}`;
       if (res.status === 403) reason = "Forbidden (403) — blocked by Roblox.";
       if (res.status === 429) reason = "Rate limited (429) — try again later.";
-      if (res.status === 404)
+      if (res.status === 404) {
         reason = "Not found (404) — invalid/deleted/private pass.";
+      }
 
       console.log("[SCAN] gamePassId:", gamePassId, "| status:", res.status);
       return message.reply(`❌ Error fetching game pass info. (${reason})`);
@@ -196,11 +176,9 @@ async function handleScan(message, gamePassId) {
 
     const data = await res.json();
 
-    // ✅ Handle both possible field styles just in case
     const name = data?.Name || data?.name || "No name";
     const apiPrice = data?.PriceInRobux ?? data?.priceInRobux ?? 0;
 
-    // ✅ PH price check (your existing helper)
     const phPrice = await fetchPHPagePrice(gamePassId);
     const finalPrice = typeof phPrice === "number" ? phPrice : apiPrice;
 
@@ -241,7 +219,6 @@ client.on("messageCreate", async (message) => {
 
   let gamePassId = null;
 
-  // Reply scan (priority)
   if (message.content.toLowerCase() === "scan" && message.reference) {
     try {
       const replied = await message.channel.messages.fetch(
@@ -255,25 +232,23 @@ client.on("messageCreate", async (message) => {
       if (!gamePassId && replied.embeds?.length > 0) {
         const embed = replied.embeds[0];
         if (embed.url) gamePassId = extractGamePassId(embed.url);
-        if (!gamePassId && embed.description)
+        if (!gamePassId && embed.description) {
           gamePassId = extractGamePassId(embed.description);
-        if (!gamePassId && embed.title)
+        }
+        if (!gamePassId && embed.title) {
           gamePassId = extractGamePassId(embed.title);
+        }
       }
     } catch (err) {
       console.error("Reply fetch error:", err);
       return;
     }
-  }
-
-  // scan <link>
-  else if (message.content.toLowerCase().startsWith("scan ")) {
+  } else if (message.content.toLowerCase().startsWith("scan ")) {
     gamePassId = extractGamePassId(message.content);
   }
 
   if (!gamePassId) return;
 
-  // prevent duplicates
   if (processedMessages.has(message.id)) return;
   processedMessages.add(message.id);
   setTimeout(() => processedMessages.delete(message.id), 10000);
@@ -282,4 +257,17 @@ client.on("messageCreate", async (message) => {
 });
 
 // ================= LOGIN =================
-client.login(process.env.BOT_TOKEN);
+const token = process.env.BOT_TOKEN;
+
+console.log("BOT_TOKEN exists:", token !== undefined);
+console.log("BOT_TOKEN type:", typeof token);
+console.log("BOT_TOKEN length:", token ? token.length : 0);
+
+if (!token) {
+  console.error("Missing BOT_TOKEN in environment variables.");
+  process.exit(1);
+}
+
+client.login(token).catch((err) => {
+  console.error("Login failed:", err.message);
+});
