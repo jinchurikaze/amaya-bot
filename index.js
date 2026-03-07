@@ -8,6 +8,18 @@
 
 require("dotenv").config();
 
+
+const token = process.env.BOT_TOKEN;
+
+if (!token) {
+  console.error("Missing BOT_TOKEN in environment variables.");
+  process.exit(1);
+}
+
+client.login(token).catch((err) => {
+  console.error("Login failed:", err.message);
+});
+
 const { Client, GatewayIntentBits, Collection } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
