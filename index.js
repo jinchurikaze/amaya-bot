@@ -258,7 +258,10 @@ client.on("messageCreate", async (message) => {
 
 // ================= LOGIN =================
 const token = process.env.BOT_TOKEN;
-
+console.log("TEST_VAR:", process.env.TEST_VAR);
+console.log("All env keys sample:", Object.keys(process.env).filter(k =>
+  ["BOT_TOKEN", "TEST_VAR", "MONGO_URI", "CLIENT_ID", "GUILD_ID"].includes(k)
+));
 console.log("BOT_TOKEN exists:", token !== undefined);
 console.log("BOT_TOKEN type:", typeof token);
 console.log("BOT_TOKEN length:", token ? token.length : 0);
