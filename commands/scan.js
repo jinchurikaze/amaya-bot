@@ -1,54 +1,102 @@
 // commands/scan.js
-// Copy-paste this whole file.
-// ✅ Works for /scan
-// ✅ Also exports runScan() so your index.js reply-"scan" can reuse it
-// ✅ Handles many gamepass link formats
-// ✅ Adds PH price check + "Regional pricing possibly on/off"
-// ✅ Uses node-fetch if global fetch isn't available
-
 const { SlashCommandBuilder } = require("discord.js");
 
-// ---- fetch compatibility (works even if global fetch breaks) ----
+// ---- fetch compatibility ----
 let fetchFn = globalThis.fetch;
 if (!fetchFn) {
-  // If you get an error here, run: npm i node-fetch
   fetchFn = require("node-fetch");
 }
 const fetch = fetchFn;
 
-// ---- Extract a Game Pass ID from many formats ----
-// Supports:
-// - https://www.roblox.com/game-pass/123456/name
-// - https://web.roblox.com/game-pass/123456/name
-// - https://roblox.com/game-pass/123456
-// - game-pass/123456
-// - 123456
-// - URLs that include ".../game-pass/123456/..."
+// --------------------------------------------------
+// Extract Game Pass ID
+// --------------------------------------------------
 function extractGamePassId(text) {
   if (!text) return null;
   const s = String(text).trim();
 
-  // plain numeric ID
   if (/^\d+$/.test(s)) return s;
 
-  // common "game-pass/<id>" pattern anywhere in the string
-  const m1 = s.match(/game-pass\/(\d+)/i);
-  if (m1?.[1]) return m1[1];
+  const patterns = [
+    /(?:https?:\/\/)?(?:www\.)?roblox\.com\/game-pass\/(\d+)/i,
+    /(?:https?:\/\/)?web\.roblox\.com\/game-pass\/(\d+)/i,
+    /game-pass\/(\d+)/i,
+    /gamepass\/(\d+)/i,
+    /game-passes\/(\d+)/i,
+    /\/passes\/(\d+)/i,
+    /\b(?:gp|gamepass|game-pass)\D*(\d{5,})\b/i,
+    /id=(\d+)/i,
+    /\b(\d{5,})\b/,
+  ];
 
-  // sometimes users paste like "gamepass 123" or "gp:123"
-  const m2 = s.match(/\b(?:gp|gamepass|game-pass)\D*(\d{5,})\b/i);
-  if (m2?.[1]) return m2[1];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m?.[1]) return m[1];
+  }
 
   return null;
 }
 
-// ---- Fetch PH page price by parsing Roblox HTML (best-effort) ----
-async function fetchPHPagePrice(gamePassId) {
+// --------------------------------------------------
+// Product info
+// --------------------------------------------------
+async function fetchGamePassProductInfo(gamePassId) {
+  return fetch(
+    `https://economy.roblox.com/v1/game-passes/${gamePassId}/game-pass-product-info`,
+    {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Accept: "application/json",
+      },
+    }
+  );
+}
+
+// --------------------------------------------------
+// Better regional-pricing signal
+// Best-effort only
+// --------------------------------------------------
+async function fetchGamePassDetails(gamePassId) {
+  const urls = [
+    `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/details`,
+    `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/details?universeId=0`,
+  ];
+
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        lastError = `HTTP ${res.status}`;
+        continue;
+      }
+
+      const data = await res.json();
+      return { ok: true, data };
+    } catch (err) {
+      lastError = err.message;
+    }
+  }
+
+  return { ok: false, error: lastError || "Unknown error" };
+}
+
+// --------------------------------------------------
+// Optional page scrape: informational only
+// --------------------------------------------------
+async function fetchPagePrice(gamePassId, acceptLanguage = "en-US,en;q=0.9") {
   try {
     const res = await fetch(`https://www.roblox.com/game-pass/${gamePassId}`, {
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-PH,en;q=0.9",
+        "Accept-Language": acceptLanguage,
         Accept: "text/html",
       },
     });
@@ -57,11 +105,10 @@ async function fetchPHPagePrice(gamePassId) {
 
     const html = await res.text();
 
-    // Try multiple patterns; Roblox changes this sometimes.
     const patterns = [
-      /"price"\s*:\s*(\d+)/, // "price":123
-      /"PriceInRobux"\s*:\s*(\d+)/, // "PriceInRobux":123
-      /data-price\s*=\s*["'](\d+)["']/, // data-price="123"
+      /"price"\s*:\s*(\d+)/i,
+      /"PriceInRobux"\s*:\s*(\d+)/i,
+      /data-price\s*=\s*["'](\d+)["']/i,
     ];
 
     for (const re of patterns) {
@@ -75,37 +122,125 @@ async function fetchPHPagePrice(gamePassId) {
   }
 }
 
-// ---- Fetch product info from Roblox economy API ----
-async function fetchGamePassProductInfo(gamePassId) {
-  const res = await fetch(
-    `https://economy.roblox.com/v1/game-passes/${gamePassId}/game-pass-product-info`,
-    {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Accept: "application/json",
-      },
-    }
+// --------------------------------------------------
+// Decide regional pricing from details endpoint
+// --------------------------------------------------
+function detectRegionalPricing(detailsData) {
+  if (!detailsData || typeof detailsData !== "object") {
+    return {
+      status: "UNKNOWN",
+      reason: "No details data available.",
+      features: [],
+      experimentActive: null,
+    };
+  }
+
+  const priceInfo =
+    detailsData.priceInformation ||
+    detailsData.priceInfo ||
+    detailsData;
+
+  const enabledFeatures = Array.isArray(priceInfo.enabledFeatures)
+    ? priceInfo.enabledFeatures
+    : [];
+
+  const experimentActive =
+    priceInfo.isInActivePriceOptimizationExperiment === true;
+
+  const hasRegionalFeature = enabledFeatures.some((feature) =>
+    [
+      "RegionalPriceExperiment",
+      "RegionalPricing",
+      "ManagedPricing",
+    ].includes(String(feature))
   );
 
-  return res;
+  if (hasRegionalFeature || experimentActive) {
+    return {
+      status: "ON",
+      reason: hasRegionalFeature
+        ? `Detected flag: ${enabledFeatures.join(", ")}`
+        : "Price optimization experiment is active.",
+      features: enabledFeatures,
+      experimentActive,
+    };
+  }
+
+  return {
+    status: "OFF",
+    reason: "No regional-pricing indicators were found.",
+    features: enabledFeatures,
+    experimentActive,
+  };
 }
 
-// ---- Main scanner (shared by /scan and reply-scan) ----
+// --------------------------------------------------
+// Build result text
+// --------------------------------------------------
+function formatScanMessage({
+  cleanLink,
+  listedPrice,
+  payout,
+  regional,
+}) {
+  const robuxEmoji = process.env.ROBUX_EMOJI_ID
+    ? `<:robux:${process.env.ROBUX_EMOJI_ID}>`
+    : "🪙";
+
+  const priceFormatted = Number(listedPrice).toLocaleString();
+  const payoutFormatted = Number(payout).toLocaleString();
+
+  let regionalLine = "❔ **Regional Pricing:** Unknown";
+  if (regional.status === "ON") {
+    regionalLine = "⚠️ **Regional Pricing:** ON";
+  } else if (regional.status === "OFF") {
+    regionalLine = "✅ **Regional Pricing:** OFF";
+  }
+
+  return [
+    `1. ${cleanLink}`,
+    ``,
+    `**Price:** ${priceFormatted}`,
+    `**You will receive:** ${payoutFormatted} ${robuxEmoji}`,
+    `${regionalLine}`,
+  ].join("\n");
+}
+
+// --------------------------------------------------
+// Main scanner
+// --------------------------------------------------
 async function runScanFromText(linkOrId) {
   const gamePassId = extractGamePassId(linkOrId);
+
+  console.log("----- SCAN DEBUG START -----");
+  console.log("[SCAN] raw input:", linkOrId);
+  console.log("[SCAN] extracted gamePassId:", gamePassId);
+  console.log("----- SCAN DEBUG END -------");
+
   if (!gamePassId) {
     return { ok: false, content: "❌ Invalid Roblox game pass link or ID." };
   }
 
   try {
-    const res = await fetchGamePassProductInfo(gamePassId);
+    const productRes = await fetchGamePassProductInfo(gamePassId);
 
-    if (!res.ok) {
-      // helpful error message
-      let reason = `API returned ${res.status}`;
-      if (res.status === 403) reason = "Forbidden (403) — Roblox blocked the request.";
-      if (res.status === 429) reason = "Rate limited (429) — try again in a bit.";
-      if (res.status === 404) reason = "Not found (404) — invalid/deleted gamepass.";
+    console.log(
+      `[SCAN] product-info status for ${gamePassId}:`,
+      productRes.status
+    );
+
+    if (!productRes.ok) {
+      let reason = `API returned ${productRes.status}`;
+      if (productRes.status === 403) {
+        reason = "Forbidden (403) — Roblox blocked the request.";
+      }
+      if (productRes.status === 404) {
+        reason =
+          "Not found (404) — invalid ID, unavailable pass, or Roblox did not return this gamepass.";
+      }
+      if (productRes.status === 429) {
+        reason = "Rate limited (429) — try again later.";
+      }
 
       return {
         ok: false,
@@ -113,54 +248,70 @@ async function runScanFromText(linkOrId) {
       };
     }
 
-    const data = await res.json();
+    const productData = await productRes.json();
+    console.log("[SCAN] productData:", productData);
 
-    const name = data?.Name || "No name";
-    const apiPrice = data?.PriceInRobux ?? 0;
-
-    // PH price (best-effort)
-    const phPrice = await fetchPHPagePrice(gamePassId);
-    const finalPrice = typeof phPrice === "number" ? phPrice : apiPrice;
-
-    const payout = finalPrice > 0 ? Math.floor(finalPrice * 0.7) : 0;
+    const listedPrice = Number(
+      productData?.PriceInRobux ?? productData?.priceInRobux ?? 0
+    );
+    const payout = listedPrice > 0 ? Math.floor(listedPrice * 0.7) : 0;
     const cleanLink = `https://www.roblox.com/game-pass/${gamePassId}`;
 
-    const robuxEmoji = process.env.ROBUX_EMOJI_ID
-      ? `<:robux:${process.env.ROBUX_EMOJI_ID}>`
-      : "<:maya_rbx:1479848567479734283>";
+    const detailsResult = await fetchGamePassDetails(gamePassId);
 
-    const priceFormatted = Number(finalPrice).toLocaleString();
-    const payoutFormatted = Number(payout).toLocaleString();
+    let regional;
+    if (detailsResult.ok) {
+      console.log("[SCAN] detailsData:", detailsResult.data);
+      regional = detectRegionalPricing(detailsResult.data);
+    } else {
+      console.log("[SCAN] details fetch failed:", detailsResult.error);
+      regional = {
+        status: "UNKNOWN",
+        reason: `Could not verify from details endpoint (${detailsResult.error}).`,
+        features: [],
+        experimentActive: null,
+      };
+    }
 
-    const regionalLine =
-      phPrice !== null && phPrice !== apiPrice
-        ? "⚠️ **Regional pricing POSSIBLY ON **"
-        : "✅ **Regional pricing likely OFF **";
+    const [pagePriceUS, pagePricePH] = await Promise.all([
+      fetchPagePrice(gamePassId, "en-US,en;q=0.9"),
+      fetchPagePrice(gamePassId, "en-PH,en;q=0.9"),
+    ]);
 
-    const content =
-      ` <${cleanLink}>\n` +
-      ` Name: **${name}**\n` +
-      ` Price: **${priceFormatted}**\n` +
-      ` You will receive: **${payoutFormatted}** ${robuxEmoji}\n` +
-      ` ${regionalLine}`;
+    console.log("[SCAN] pagePriceUS:", pagePriceUS);
+    console.log("[SCAN] pagePricePH:", pagePricePH);
+    console.log("[SCAN] regional result:", regional);
 
-    return { ok: true, content, gamePassId };
+    const content = formatScanMessage({
+      cleanLink,
+      listedPrice,
+      payout,
+      regional,
+    });
+
+    return {
+      ok: true,
+      content,
+      gamePassId,
+      regional,
+      pagePriceUS,
+      pagePricePH,
+    };
   } catch (err) {
     console.error("Scan internal error:", err);
     return { ok: false, content: "❌ Error fetching game pass info." };
   }
 }
 
-// Exported helper: your index.js can call this directly
+// Exported helper
 async function runScan(linkOrId) {
-  const result = await runScanFromText(linkOrId);
-  return result;
+  return runScanFromText(linkOrId);
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("scan")
-    .setDescription("Scan a Roblox game pass")
+    .setDescription("Scan a Roblox game pass and check regional pricing")
     .addStringOption((option) =>
       option
         .setName("link")
@@ -174,18 +325,11 @@ module.exports = {
     const input = interaction.options.getString("link");
     const result = await runScanFromText(input);
 
-    // Keep your behavior: show errors ephemeral
-    if (!result.ok) {
-      return interaction.editReply({
-        content: result.content,
-        ephemeral: true,
-      });
-    }
-
-    return interaction.editReply({ content: result.content });
+    return interaction.editReply({
+      content: result.content,
+    });
   },
 
-  // For index.js reply-scan feature
   runScan,
   extractGamePassId,
 };
