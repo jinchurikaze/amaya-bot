@@ -50,93 +50,118 @@ async function fetchGamePassProductInfo(gamePassId) {
 }
 
 // --------------------------------------------------
-// Regional pricing details
+// Regional pricing detection
 // --------------------------------------------------
-async function fetchGamePassDetails(gamePassId) {
-  const urls = [
-    `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/details`,
-    `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/details?universeId=0`,
-  ];
-
-  let lastError = null;
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
+async function fetchRegionalPricingStatus(gamePassId) {
+  // --- Primary: economy.roblox.com v2 assets ---
+  try {
+    const res = await fetch(
+      `https://economy.roblox.com/v2/assets/${gamePassId}/details`,
+      {
         headers: {
           "User-Agent": "Mozilla/5.0",
           Accept: "application/json",
         },
-      });
-
-      if (!res.ok) {
-        lastError = `HTTP ${res.status}`;
-        continue;
       }
+    );
 
+    if (res.ok) {
       const data = await res.json();
-      return { ok: true, data };
-    } catch (err) {
-      lastError = err.message;
+
+      const hasRegional =
+        data?.CountrySpecificPrices != null ||
+        data?.regionalPricingEnabled === true;
+
+      return {
+        status: hasRegional ? "ON" : "OFF",
+        source: "economy-v2",
+      };
     }
-  }
+  } catch (_) {}
 
-  return { ok: false, error: lastError || "Unknown error" };
-}
+  // --- Fallback: catalog.roblox.com v1 itemdetails (POST) ---
+  try {
+    const res = await fetch(
+      `https://catalog.roblox.com/v1/catalog/items/details`,
+      {
+        method: "POST",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          items: [{ itemType: "Asset", id: Number(gamePassId) }],
+        }),
+      }
+    );
 
-// --------------------------------------------------
-// Detect regional pricing
-// --------------------------------------------------
-function detectRegionalPricing(detailsData) {
-  if (!detailsData || typeof detailsData !== "object") {
-    return {
-      status: "UNKNOWN",
-      reason: "No details data available.",
-    };
-  }
+    if (res.ok) {
+      const data = await res.json();
+      const item = data?.data?.[0];
 
-  const priceInfo =
-    detailsData.priceInformation ||
-    detailsData.priceInfo ||
-    detailsData;
+      if (item) {
+        const hasRegional =
+          item.regionalPricingEnabled === true ||
+          item.countrySpecificPrices != null ||
+          (Array.isArray(item.enabledFeatures) &&
+            item.enabledFeatures.some((f) =>
+              ["RegionalPricing", "RegionalPriceExperiment", "ManagedPricing"].includes(f)
+            ));
 
-  const enabledFeatures = Array.isArray(priceInfo.enabledFeatures)
-    ? priceInfo.enabledFeatures
-    : [];
+        return {
+          status: hasRegional ? "ON" : "OFF",
+          source: "catalog-v1",
+        };
+      }
+    }
+  } catch (_) {}
 
-  const experimentActive =
-    priceInfo.isInActivePriceOptimizationExperiment === true;
+  // --- Last resort: game-passes details endpoint ---
+  try {
+    const res = await fetch(
+      `https://apis.roblox.com/game-passes/v1/game-passes/${gamePassId}/details`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "application/json",
+        },
+      }
+    );
 
-  const hasRegionalFeature = enabledFeatures.some((feature) =>
-    [
-      "RegionalPriceExperiment",
-      "RegionalPricing",
-      "ManagedPricing",
-    ].includes(String(feature))
-  );
+    if (res.ok) {
+      const data = await res.json();
 
-  if (hasRegionalFeature || experimentActive) {
-    return {
-      status: "ON",
-      reason: "Regional pricing indicators detected.",
-    };
-  }
+      const priceInfo =
+        data.priceInformation || data.priceInfo || data;
 
-  return {
-    status: "OFF",
-    reason: "No regional pricing indicators found.",
-  };
+      const enabledFeatures = Array.isArray(priceInfo.enabledFeatures)
+        ? priceInfo.enabledFeatures
+        : [];
+
+      const experimentActive =
+        priceInfo.isInActivePriceOptimizationExperiment === true;
+
+      const hasRegional =
+        experimentActive ||
+        enabledFeatures.some((f) =>
+          ["RegionalPriceExperiment", "RegionalPricing", "ManagedPricing"].includes(String(f))
+        );
+
+      return {
+        status: hasRegional ? "ON" : "OFF",
+        source: "game-passes-v1",
+      };
+    }
+  } catch (_) {}
+
+  return { status: "UNKNOWN", source: "none" };
 }
 
 // --------------------------------------------------
 // Clean output format
 // --------------------------------------------------
-function formatScanMessage({
-  cleanLink,
-  listedPrice,
-  payout,
-  regional,
-}) {
+function formatScanMessage({ cleanLink, listedPrice, payout, regional }) {
   const robuxEmoji = process.env.ROBUX_EMOJI_ID
     ? `<:robux:${process.env.ROBUX_EMOJI_ID}>`
     : "<:maya_rbx:1479848567479734283>";
@@ -153,11 +178,12 @@ function formatScanMessage({
 
   return [
     `1. ${cleanLink}`,
-    ``,
     `Price: ${priceFormatted}`,
     `You will receive: **${payoutFormatted}** ${robuxEmoji}`,
-    `${regionalLine}`,
-  ].join("\n");
+    regionalLine,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 // --------------------------------------------------
@@ -175,15 +201,9 @@ async function runScanFromText(linkOrId) {
 
     if (!productRes.ok) {
       let reason = `API returned ${productRes.status}`;
-      if (productRes.status === 403) {
-        reason = "Forbidden (403) — Roblox blocked the request.";
-      }
-      if (productRes.status === 404) {
-        reason = "Not found (404) — invalid/deleted gamepass.";
-      }
-      if (productRes.status === 429) {
-        reason = "Rate limited (429) — try again later.";
-      }
+      if (productRes.status === 403) reason = "Forbidden (403) — Roblox blocked the request.";
+      if (productRes.status === 404) reason = "Not found (404) — invalid/deleted gamepass.";
+      if (productRes.status === 429) reason = "Rate limited (429) — try again later.";
 
       return {
         ok: false,
@@ -203,24 +223,9 @@ async function runScanFromText(linkOrId) {
     const payout = listedPrice > 0 ? Math.floor(listedPrice * 0.7) : 0;
     const cleanLink = `https://www.roblox.com/game-pass/${gamePassId}`;
 
-    const detailsResult = await fetchGamePassDetails(gamePassId);
+    const regional = await fetchRegionalPricingStatus(gamePassId);
 
-    let regional;
-    if (detailsResult.ok) {
-      regional = detectRegionalPricing(detailsResult.data);
-    } else {
-      regional = {
-        status: "UNKNOWN",
-        reason: "Could not verify regional pricing.",
-      };
-    }
-
-    const content = formatScanMessage({
-      cleanLink,
-      listedPrice,
-      payout,
-      regional,
-    });
+    const content = formatScanMessage({ cleanLink, listedPrice, payout, regional });
 
     return { ok: true, content, gamePassId, regional };
   } catch (err) {
