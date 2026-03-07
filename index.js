@@ -244,7 +244,7 @@ client.on("messageCreate", async (message) => {
 
     // send new sticky at bottom
     const newSticky = await message.channel.send({
-      content: `${sticky.content}\n\n-# Sticky message set up by server admins.`,
+      content: content
     });
 
     stickyData[message.channel.id].messageId = newSticky.id;

@@ -50,7 +50,7 @@ module.exports = {
       }
 
       const sent = await interaction.channel.send({
-        content: `${content}\n\n-# Sticky message set up by server admins.`,
+        content: content
       });
 
       stickyData[channelId] = {
