@@ -1,11 +1,9 @@
 // index.js
-// UPDATED VERSION
+// UPDATED VERSION - FIXED (removed duplicates)
 // ✅ uses BOT_TOKEN from environment variables
-// ✅ logs token debug info
-// ✅ only logs in once
-// ✅ keeps your scan features
-// ✅ reply-based "scan" now uses commands/scan.js logic
-// ✅ adds sticky message auto-repost support for slash commands
+// ✅ Express server for keeping bot awake
+// ✅ scan features
+// ✅ sticky message support
 
 require("dotenv").config();
 
@@ -16,16 +14,17 @@ const express = require("express");
 
 // ================= KEEP ALIVE SERVER =================
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => res.send("✅ Bot is running!"));
 app.get("/health", (req, res) =>
   res.json({ status: "alive", timestamp: new Date() })
 );
 
-app.listen(3000, () => console.log("🌐 Server is ready on port 3000"));
+app.listen(PORT, () => console.log(`🌐 Server is ready on port ${PORT}`));
 
 // ================= DATABASE =================
-require("./database");
+// require("./database"); // MongoDB disabled - not needed
 
 // ================= STICKY STORAGE =================
 const { loadStickyData, saveStickyData } = require("./stickyData");
@@ -60,7 +59,7 @@ if (fs.existsSync(commandsPath)) {
 }
 
 // ================= READY =================
-client.once("clientReady", () => {
+client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(`📊 Serving ${client.guilds.cache.size} server(s)`);
 
@@ -106,8 +105,6 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ================= SCAN HELPERS =================
-// Reuse the logic from commands/scan.js so slash command and message scan
-// always behave the same.
 let scanCommand = null;
 try {
   scanCommand = require("./commands/scan");
