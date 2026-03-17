@@ -4,6 +4,7 @@
 // ✅ Express server for keeping bot awake
 // ✅ scan features
 // ✅ sticky message support
+// ✅ FIXED: Added GuildPresences intent to show bot online
 
 require("dotenv").config();
 
@@ -36,6 +37,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildPresences, // ← ADDED: Makes bot show online status
   ],
 });
 
