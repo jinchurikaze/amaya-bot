@@ -348,6 +348,7 @@ client.on(Events.MessageCreate, async (message) => {
 });
 
 // ================= LOGIN =================
+const https = require("https");
 const token = process.env.BOT_TOKEN;
 
 console.log("🔐 BOT_TOKEN exists:", !!token);
@@ -358,16 +359,73 @@ if (!token) {
   process.exit(1);
 }
 
+function testDiscordToken(botToken) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "discord.com",
+        path: "/api/v10/users/@me",
+        method: "GET",
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          "User-Agent": "amaya-bot-debug",
+        },
+      },
+      (res) => {
+        let data = "";
+
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode,
+            body: data,
+          });
+        });
+      }
+    );
+
+    req.on("error", reject);
+    req.setTimeout(15000, () => {
+      req.destroy(new Error("Token test request timed out"));
+    });
+    req.end();
+  });
+}
+
+client.on("debug", (msg) => {
+  console.log("🔎 DEBUG:", msg);
+});
+
+client.on("error", (err) => {
+  console.error("❌ Client error:", err);
+});
+
+client.on("shardError", (err) => {
+  console.error("❌ Shard error:", err);
+});
+
 (async () => {
   try {
+    console.log("🧪 Testing token with Discord REST API...");
+    const tokenCheck = await testDiscordToken(token);
+
+    console.log("🧪 Token test status:", tokenCheck.statusCode);
+    console.log("🧪 Token test body:", tokenCheck.body);
+
+    if (tokenCheck.statusCode !== 200) {
+      console.error("❌ Token failed REST validation.");
+      process.exit(1);
+    }
+
     console.log("🔄 Attempting to login to Discord...");
-    const loginResult = await client.login(token);
+    await client.login(token);
     console.log("✅ client.login() resolved successfully");
-    console.log("🔑 Login result type:", typeof loginResult);
   } catch (err) {
     console.error("❌ LOGIN FAILED");
     console.error("Message:", err.message);
-    console.error("Code:", err.code);
     console.error("Full error:", err);
     process.exit(1);
   }
