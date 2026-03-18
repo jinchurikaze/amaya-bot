@@ -1,14 +1,23 @@
 // index.js
-// UPDATED VERSION - FIXED (removed duplicates)
+// CLEANED + DEBUG VERSION
 // ✅ uses BOT_TOKEN from environment variables
-// ✅ Express server for keeping bot awake
+// ✅ Express server for Render
 // ✅ scan features
 // ✅ sticky message support
-// ✅ FIXED: Added GuildPresences intent to show bot online
+// ✅ improved Discord login/error debugging
+// ✅ no duplicate login
+// ✅ better startup logs
 
 require("dotenv").config();
 
-const { Client, GatewayIntentBits, Collection } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Collection,
+  Events,
+  ActivityType,
+} = require("discord.js");
+
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
@@ -19,7 +28,7 @@ const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => res.send("✅ Bot is running!"));
 app.get("/health", (req, res) =>
-  res.json({ status: "alive", timestamp: new Date() })
+  res.json({ status: "alive", timestamp: new Date().toISOString() })
 );
 
 app.listen(PORT, () => console.log(`🌐 Server is ready on port ${PORT}`));
@@ -30,6 +39,21 @@ app.listen(PORT, () => console.log(`🌐 Server is ready on port ${PORT}`));
 // ================= STICKY STORAGE =================
 const { loadStickyData, saveStickyData } = require("./stickyData");
 
+// ================= OPTIONAL HANDLERS =================
+let interactionHandler = null;
+try {
+  interactionHandler = require("./interaction");
+} catch (err) {
+  console.warn("⚠️ interaction.js not loaded:", err.message);
+}
+
+let scanCommand = null;
+try {
+  scanCommand = require("./commands/scan");
+} catch (err) {
+  console.error("❌ Failed to load ./commands/scan.js:", err);
+}
+
 // ================= DISCORD CLIENT =================
 const client = new Client({
   intents: [
@@ -37,12 +61,27 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildPresences, // ← ADDED: Makes bot show online status
+    // GuildPresences is NOT required just to make your bot appear online.
+    // Only enable it if your bot actually needs presence/member status data.
   ],
 });
 
-// ================= LOAD COMMANDS =================
 client.commands = new Collection();
+
+// ================= PROCESS ERROR HANDLERS =================
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught exception:", error);
+});
+
+process.on("uncaughtExceptionMonitor", (error) => {
+  console.error("❌ Uncaught exception monitor:", error);
+});
+
+// ================= LOAD COMMANDS =================
 const commandsPath = path.join(__dirname, "commands");
 
 if (fs.existsSync(commandsPath)) {
@@ -51,48 +90,110 @@ if (fs.existsSync(commandsPath)) {
     .filter((file) => file.endsWith(".js"));
 
   for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
+    try {
+      const filePath = path.join(commandsPath, file);
+      const command = require(filePath);
 
-    if ("data" in command && "execute" in command) {
-      client.commands.set(command.data.name, command);
-      console.log(`✅ Loaded command: ${command.data.name}`);
+      if ("data" in command && "execute" in command) {
+        client.commands.set(command.data.name, command);
+        console.log(`✅ Loaded command: ${command.data.name}`);
+      } else {
+        console.warn(`⚠️ Skipped invalid command file: ${file}`);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to load command file ${file}:`, err);
     }
   }
+} else {
+  console.warn("⚠️ commands folder not found.");
 }
 
 // ================= READY =================
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log(`📊 Serving ${client.guilds.cache.size} server(s)`);
+client.once(Events.ClientReady, async (readyClient) => {
+  console.log(`✅ Logged in as ${readyClient.user.tag}`);
+  console.log(`🆔 Bot user ID: ${readyClient.user.id}`);
+  console.log(`📊 Serving ${readyClient.guilds.cache.size} server(s)`);
 
-  if (process.env.BOT_STATUS) {
-    client.user.setPresence({
-      activities: [{ name: process.env.ACTIVITY_NAME || "amaya" }],
+  try {
+    const activityName = process.env.ACTIVITY_NAME || "amaya";
+    const activityTypeRaw = (process.env.BOT_ACTIVITY || "PLAYING").toUpperCase();
+
+    const activityMap = {
+      PLAYING: ActivityType.Playing,
+      WATCHING: ActivityType.Watching,
+      LISTENING: ActivityType.Listening,
+      COMPETING: ActivityType.Competing,
+      STREAMING: ActivityType.Streaming,
+    };
+
+    const activityType = activityMap[activityTypeRaw] ?? ActivityType.Playing;
+
+    await readyClient.user.setPresence({
+      activities: [{ name: activityName, type: activityType }],
       status: "online",
     });
+
+    console.log(
+      `✅ Presence set: ${activityTypeRaw} ${activityName} | status=online`
+    );
+  } catch (err) {
+    console.error("❌ Failed to set presence:", err);
   }
 });
 
+// ================= DISCORD DEBUG EVENTS =================
+client.on(Events.Error, (error) => {
+  console.error("❌ Discord client error:", error);
+});
+
+client.on(Events.Warn, (info) => {
+  console.warn("⚠️ Discord warning:", info);
+});
+
+client.on(Events.ShardDisconnect, (event, shardId) => {
+  console.warn(`⚠️ Shard ${shardId} disconnected. Code: ${event.code}`);
+});
+
+client.on(Events.ShardError, (error, shardId) => {
+  console.error(`❌ Shard ${shardId} error:`, error);
+});
+
+client.on(Events.ShardReady, (shardId) => {
+  console.log(`✅ Shard ${shardId} is ready`);
+});
+
+client.on(Events.ShardResume, (shardId, replayedEvents) => {
+  console.log(`🔄 Shard ${shardId} resumed, replayed ${replayedEvents} events`);
+});
+
 // ================= SLASH COMMAND + BUTTON HANDLER =================
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isButton()) {
-    const interactionHandler = require("./interaction");
-    return interactionHandler(interaction);
-  }
-
-  if (!interaction.isChatInputCommand()) return;
-
-  const command = client.commands.get(interaction.commandName);
-  if (!command) {
-    console.error(`❌ No command matching ${interaction.commandName}`);
-    return;
-  }
-
+client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isButton()) {
+      if (!interactionHandler) {
+        return interaction.reply({
+          content: "❌ Interaction handler is unavailable.",
+          ephemeral: true,
+        }).catch(() => {});
+      }
+
+      return interactionHandler(interaction);
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+
+    const command = client.commands.get(interaction.commandName);
+    if (!command) {
+      console.error(`❌ No command matching ${interaction.commandName}`);
+      return interaction.reply({
+        content: "❌ Command not found.",
+        ephemeral: true,
+      }).catch(() => {});
+    }
+
     await command.execute(interaction);
   } catch (error) {
-    console.error("Slash command error:", error);
+    console.error("❌ Interaction error:", error);
 
     const errorMessage = {
       content: "❌ There was an error executing this command!",
@@ -108,19 +209,11 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ================= SCAN HELPERS =================
-let scanCommand = null;
-try {
-  scanCommand = require("./commands/scan");
-} catch (err) {
-  console.error("❌ Failed to load ./commands/scan.js:", err);
-}
-
 function extractGamePassId(text) {
   if (scanCommand && typeof scanCommand.extractGamePassId === "function") {
     return scanCommand.extractGamePassId(text);
   }
 
-  // fallback only if scan.js failed to load
   if (!text) return null;
   const s = String(text).trim();
 
@@ -157,7 +250,7 @@ async function handleScan(message, input) {
 
     return message.reply(result.content);
   } catch (err) {
-    console.error("Scan error:", err);
+    console.error("❌ Scan error:", err);
     return message.reply("❌ Error fetching game pass info.");
   }
 }
@@ -166,91 +259,91 @@ async function handleScan(message, input) {
 const processedMessages = new Set();
 const stickyCooldowns = new Map();
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-
-  // =========================
-  // SCAN FEATURE
-  // =========================
-  let scanInput = null;
-
-  if (message.content.toLowerCase() === "scan" && message.reference) {
-    try {
-      const replied = await message.channel.messages.fetch(
-        message.reference.messageId
-      );
-
-      if (replied.content) {
-        scanInput = replied.content;
-      }
-
-      if (!scanInput && replied.embeds?.length > 0) {
-        const embed = replied.embeds[0];
-
-        if (embed.url) scanInput = embed.url;
-        if (!scanInput && embed.description) scanInput = embed.description;
-        if (!scanInput && embed.title) scanInput = embed.title;
-      }
-    } catch (err) {
-      console.error("Reply fetch error:", err);
-      return;
-    }
-  } else if (message.content.toLowerCase().startsWith("scan ")) {
-    scanInput = message.content.slice(5).trim();
-  }
-
-  if (scanInput) {
-    const gamePassId = extractGamePassId(scanInput);
-
-    if (!gamePassId) {
-      return message.reply("❌ Invalid Roblox game pass link or ID.");
-    }
-
-    if (processedMessages.has(message.id)) return;
-    processedMessages.add(message.id);
-    setTimeout(() => processedMessages.delete(message.id), 10000);
-
-    return handleScan(message, gamePassId);
-  }
-
-  // =========================
-  // STICKY FEATURE
-  // =========================
-  const stickyData = loadStickyData();
-  const sticky = stickyData[message.channel.id];
-
-  if (!sticky) return;
-
-  // ignore the sticky message itself so it doesn't loop
-  if (message.id === sticky.messageId) return;
-
-  // cooldown to reduce spam in active channels
-  const now = Date.now();
-  const lastStickyTime = stickyCooldowns.get(message.channel.id) || 0;
-
-  if (now - lastStickyTime < 3000) return;
-  stickyCooldowns.set(message.channel.id, now);
-
+client.on(Events.MessageCreate, async (message) => {
   try {
-    // delete previous sticky
-    if (sticky.messageId) {
+    if (message.author.bot) return;
+
+    // =========================
+    // SCAN FEATURE
+    // =========================
+    let scanInput = null;
+
+    if (message.content.toLowerCase() === "scan" && message.reference) {
       try {
-        const oldSticky = await message.channel.messages.fetch(sticky.messageId);
-        await oldSticky.delete().catch(() => {});
+        const replied = await message.channel.messages.fetch(
+          message.reference.messageId
+        );
+
+        if (replied.content) {
+          scanInput = replied.content;
+        }
+
+        if (!scanInput && replied.embeds?.length > 0) {
+          const embed = replied.embeds[0];
+
+          if (embed.url) scanInput = embed.url;
+          if (!scanInput && embed.description) scanInput = embed.description;
+          if (!scanInput && embed.title) scanInput = embed.title;
+        }
       } catch (err) {
-        // previous sticky may already be deleted or missing
+        console.error("❌ Reply fetch error:", err);
+        return;
       }
+    } else if (message.content.toLowerCase().startsWith("scan ")) {
+      scanInput = message.content.slice(5).trim();
     }
 
-    // send new sticky at bottom
-    const newSticky = await message.channel.send({
-      content: sticky.content
-    });
+    if (scanInput) {
+      const gamePassId = extractGamePassId(scanInput);
 
-    stickyData[message.channel.id].messageId = newSticky.id;
-    saveStickyData(stickyData);
-  } catch (error) {
-    console.error("Sticky message error:", error);
+      if (!gamePassId) {
+        return message.reply("❌ Invalid Roblox game pass link or ID.");
+      }
+
+      if (processedMessages.has(message.id)) return;
+      processedMessages.add(message.id);
+      setTimeout(() => processedMessages.delete(message.id), 10000);
+
+      return handleScan(message, gamePassId);
+    }
+
+    // =========================
+    // STICKY FEATURE
+    // =========================
+    const stickyData = loadStickyData();
+    const sticky = stickyData[message.channel.id];
+
+    if (!sticky) return;
+
+    if (message.id === sticky.messageId) return;
+
+    const now = Date.now();
+    const lastStickyTime = stickyCooldowns.get(message.channel.id) || 0;
+
+    if (now - lastStickyTime < 3000) return;
+    stickyCooldowns.set(message.channel.id, now);
+
+    try {
+      if (sticky.messageId) {
+        try {
+          const oldSticky = await message.channel.messages.fetch(sticky.messageId);
+          await oldSticky.delete().catch(() => {});
+        } catch {
+          // ignore if old sticky is already missing
+        }
+      }
+
+      const newSticky = await message.channel.send({
+        content: sticky.content,
+      });
+
+      stickyData[message.channel.id].messageId = newSticky.id;
+      saveStickyData(stickyData);
+    } catch (error) {
+      console.error("❌ Sticky message error:", error);
+    }
+  } catch (err) {
+    console.error("❌ messageCreate handler crashed:", err);
   }
 });
 
@@ -265,29 +358,17 @@ if (!token) {
   process.exit(1);
 }
 
-console.log("🔄 Attempting to login to Discord...");
-
-client.login(token)
-  .then(() => {
-    console.log("✅ Login method called successfully");
-  })
-  .catch((err) => {
-    console.error("❌ LOGIN FAILED:");
-    console.error("Error message:", err.message);
-    console.error("Error code:", err.code);
+(async () => {
+  try {
+    console.log("🔄 Attempting to login to Discord...");
+    const loginResult = await client.login(token);
+    console.log("✅ client.login() resolved successfully");
+    console.log("🔑 Login result type:", typeof loginResult);
+  } catch (err) {
+    console.error("❌ LOGIN FAILED");
+    console.error("Message:", err.message);
+    console.error("Code:", err.code);
     console.error("Full error:", err);
     process.exit(1);
-  });
-
-// Add connection error handlers
-client.on('error', error => {
-  console.error('❌ Discord client error:', error);
-});
-
-client.on('warn', info => {
-  console.log('⚠️ Discord warning:', info);
-});
-
-client.on('disconnect', () => {
-  console.log('⚠️ Disconnected from Discord');
-});
+  }
+})();
