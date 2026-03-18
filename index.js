@@ -257,22 +257,37 @@ client.on("messageCreate", async (message) => {
 // ================= LOGIN =================
 const token = process.env.BOT_TOKEN;
 
-console.log("TEST_VAR:", process.env.TEST_VAR);
-console.log(
-  "All env keys sample:",
-  Object.keys(process.env).filter((k) =>
-    ["BOT_TOKEN", "TEST_VAR", "MONGO_URI", "CLIENT_ID", "GUILD_ID"].includes(k)
-  )
-);
-console.log("BOT_TOKEN exists:", token !== undefined);
-console.log("BOT_TOKEN type:", typeof token);
-console.log("BOT_TOKEN length:", token ? token.length : 0);
+console.log("🔐 BOT_TOKEN exists:", !!token);
+console.log("🔐 BOT_TOKEN length:", token ? token.length : 0);
 
 if (!token) {
-  console.error("Missing BOT_TOKEN in environment variables.");
+  console.error("❌ Missing BOT_TOKEN in environment variables.");
   process.exit(1);
 }
 
-client.login(token).catch((err) => {
-  console.error("Login failed:", err.message);
+console.log("🔄 Attempting to login to Discord...");
+
+client.login(token)
+  .then(() => {
+    console.log("✅ Login method called successfully");
+  })
+  .catch((err) => {
+    console.error("❌ LOGIN FAILED:");
+    console.error("Error message:", err.message);
+    console.error("Error code:", err.code);
+    console.error("Full error:", err);
+    process.exit(1);
+  });
+
+// Add connection error handlers
+client.on('error', error => {
+  console.error('❌ Discord client error:', error);
+});
+
+client.on('warn', info => {
+  console.log('⚠️ Discord warning:', info);
+});
+
+client.on('disconnect', () => {
+  console.log('⚠️ Disconnected from Discord');
 });
