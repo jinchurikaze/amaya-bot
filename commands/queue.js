@@ -1,4 +1,4 @@
-const {
+  const {
   SlashCommandBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -53,7 +53,7 @@ module.exports = {
     // send order message
     const orderMessage = await orderListChannel.send({
       content: `⠀
-<:maya_24:1378327229926215681>   **order confirmed**
+<:041:1498666072302424194>    **order confirmed**
 <:maya_11:1378085579463589959>  https://discord.com/channels/${interaction.guild.id}/${interaction.channel.id}
 <:maya_11:1378085579463589959>  ${quantity}  •  ${item}
 <:maya_11:1378085579463589959>  ₱${price}  •  thru ${payment}
