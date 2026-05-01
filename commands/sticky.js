@@ -50,7 +50,10 @@ module.exports = {
       }
 
       const sent = await interaction.channel.send({
-        content: content
+        content: content,
+        allowedMentions: {
+          parse: [],
+        },
       });
 
       stickyData[channelId] = {
@@ -63,6 +66,9 @@ module.exports = {
       return interaction.reply({
         content: "✅ Sticky message set for this channel.",
         ephemeral: true,
+        allowedMentions: {
+          parse: [],
+        },
       });
     }
 
@@ -71,12 +77,18 @@ module.exports = {
         return interaction.reply({
           content: "There is no sticky message set in this channel.",
           ephemeral: true,
+          allowedMentions: {
+            parse: [],
+          },
         });
       }
 
       return interaction.reply({
         content: `📌 Current sticky message:\n${stickyData[channelId].content}`,
         ephemeral: true,
+        allowedMentions: {
+          parse: [],
+        },
       });
     }
 
@@ -85,6 +97,9 @@ module.exports = {
         return interaction.reply({
           content: "There is no sticky message set in this channel.",
           ephemeral: true,
+          allowedMentions: {
+            parse: [],
+          },
         });
       }
 
@@ -103,6 +118,9 @@ module.exports = {
       return interaction.reply({
         content: "🗑️ Sticky message removed from this channel.",
         ephemeral: true,
+        allowedMentions: {
+          parse: [],
+        },
       });
     }
   },
