@@ -4,7 +4,9 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('embed')
     .setDescription('Send an order confirmation embed'),
+
   async execute(interaction) {
+
     const order = {
       username: interaction.user.username,
       quantity: 1,
@@ -15,18 +17,42 @@ module.exports = {
       _id: '12345'
     };
 
+    const statusEmoji =
+      order.status === "done"
+        ? "🟢"
+        : "🟠";
+
     const embed = new EmbedBuilder()
-      .setColor(order.status === "done" ? "#57f287" : "#faa61a")
-      .setAuthor({ name: "order confirmed", iconURL: "https://i.imgur.com/7bIYpKp.png" })
+      .setColor('#2B2D31')
+
+      .setAuthor({
+        name: 'order confirmed',
+        iconURL: 'https://i.imgur.com/7bIYpKp.png'
+      })
+
+      .setThumbnail(interaction.user.displayAvatarURL())
+
       .setDescription(
-        `— **#${order.username}**\n` +
-        `— **${order.quantity}** · ${order.item}\n` +
-        `— **₱${order.price}** · paid thru **${order.payment}** !\n\n` +
-        `status ／ **${order.status}**`
+        [
+          `### ${order.username}`,
+          ``,
+          `> 📦 item : **${order.item}**`,
+          `> 🔢 quantity : **${order.quantity}**`,
+          `> 💸 price : **₱${order.price}**`,
+          `> 💳 payment : **${order.payment}**`,
+          ``,
+          `> ${statusEmoji} status : **${order.status}**`
+        ].join('\n')
       )
-      .setFooter({ text: `Order ID: ${order._id}` })
+
+      .setFooter({
+        text: `Order ID • ${order._id}`
+      })
+
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({
+      embeds: [embed]
+    });
   }
 };
