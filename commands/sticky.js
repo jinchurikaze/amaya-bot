@@ -5,6 +5,17 @@ const {
 
 const { loadStickyData, saveStickyData } = require("../stickyData");
 
+async function deleteOldSticky(channel, messageId) {
+  if (!channel || !messageId) return;
+
+  try {
+    const oldSticky = await channel.messages.fetch(messageId);
+    await oldSticky.delete().catch(() => {});
+  } catch {
+    // Ignore missing/deleted sticky messages
+  }
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("sticky")
@@ -34,23 +45,19 @@ module.exports = {
 
   async execute(interaction) {
     const subcommand = interaction.options.getSubcommand();
-    const channelId = interaction.channel.id;
+    const channel = interaction.channel;
+    const channelId = channel.id;
+
     const stickyData = loadStickyData();
+    const currentSticky = stickyData[channelId];
 
     if (subcommand === "set") {
       const content = interaction.options.getString("message");
 
-      if (stickyData[channelId]?.messageId) {
-        try {
-          const oldSticky = await interaction.channel.messages.fetch(
-            stickyData[channelId].messageId
-          );
-          await oldSticky.delete().catch(() => {});
-        } catch {}
-      }
+      await deleteOldSticky(channel, currentSticky?.messageId);
 
-      const sent = await interaction.channel.send({
-        content: content,
+      const sent = await channel.send({
+        content,
         allowedMentions: {
           parse: [],
         },
@@ -66,25 +73,19 @@ module.exports = {
       return interaction.reply({
         content: "✅ Sticky message set for this channel.",
         ephemeral: true,
-        allowedMentions: {
-          parse: [],
-        },
       });
     }
 
     if (subcommand === "view") {
-      if (!stickyData[channelId]) {
+      if (!currentSticky) {
         return interaction.reply({
           content: "There is no sticky message set in this channel.",
           ephemeral: true,
-          allowedMentions: {
-            parse: [],
-          },
         });
       }
 
       return interaction.reply({
-        content: `📌 Current sticky message:\n${stickyData[channelId].content}`,
+        content: `📌 Current sticky message:\n${currentSticky.content}`,
         ephemeral: true,
         allowedMentions: {
           parse: [],
@@ -93,24 +94,14 @@ module.exports = {
     }
 
     if (subcommand === "remove") {
-      if (!stickyData[channelId]) {
+      if (!currentSticky) {
         return interaction.reply({
           content: "There is no sticky message set in this channel.",
           ephemeral: true,
-          allowedMentions: {
-            parse: [],
-          },
         });
       }
 
-      if (stickyData[channelId]?.messageId) {
-        try {
-          const oldSticky = await interaction.channel.messages.fetch(
-            stickyData[channelId].messageId
-          );
-          await oldSticky.delete().catch(() => {});
-        } catch {}
-      }
+      await deleteOldSticky(channel, currentSticky.messageId);
 
       delete stickyData[channelId];
       saveStickyData(stickyData);
@@ -118,9 +109,6 @@ module.exports = {
       return interaction.reply({
         content: "🗑️ Sticky message removed from this channel.",
         ephemeral: true,
-        allowedMentions: {
-          parse: [],
-        },
       });
     }
   },

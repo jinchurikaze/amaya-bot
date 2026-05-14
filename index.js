@@ -4,8 +4,8 @@
 // ✅ Express server for Render
 // ✅ scan features
 // ✅ sticky message support
+// ✅ sticky refresh after slash commands/buttons/messages
 // ✅ improved Discord login/error debugging
-// ✅ no manual token REST test
 // ✅ no duplicate login
 
 require("dotenv").config();
@@ -32,9 +32,6 @@ app.get("/health", (req, res) =>
 );
 
 app.listen(PORT, () => console.log(`🌐 Server is ready on port ${PORT}`));
-
-// ================= DATABASE =================
-// require("./database"); // MongoDB disabled - not needed
 
 // ================= STICKY STORAGE =================
 const { loadStickyData, saveStickyData } = require("./stickyData");
@@ -65,6 +62,47 @@ const client = new Client({
 });
 
 client.commands = new Collection();
+
+// ================= STICKY HELPERS =================
+const stickyCooldowns = new Map();
+
+async function refreshSticky(channel) {
+  if (!channel || !channel.id || !channel.send) return;
+
+  const stickyData = loadStickyData();
+  const sticky = stickyData[channel.id];
+
+  if (!sticky) return;
+
+  const now = Date.now();
+  const lastStickyTime = stickyCooldowns.get(channel.id) || 0;
+
+  if (now - lastStickyTime < 3000) return;
+  stickyCooldowns.set(channel.id, now);
+
+  try {
+    if (sticky.messageId) {
+      try {
+        const oldSticky = await channel.messages.fetch(sticky.messageId);
+        await oldSticky.delete().catch(() => {});
+      } catch {
+        // Old sticky may already be deleted
+      }
+    }
+
+    const newSticky = await channel.send({
+      content: sticky.content,
+      allowedMentions: {
+        parse: [],
+      },
+    });
+
+    stickyData[channel.id].messageId = newSticky.id;
+    saveStickyData(stickyData);
+  } catch (error) {
+    console.error("❌ Sticky refresh error:", error);
+  }
+}
 
 // ================= PROCESS ERROR HANDLERS =================
 process.on("unhandledRejection", (reason) => {
@@ -189,7 +227,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .catch(() => {});
       }
 
-      return interactionHandler(interaction);
+      await interactionHandler(interaction);
+
+      setTimeout(() => {
+        refreshSticky(interaction.channel);
+      }, 1000);
+
+      return;
     }
 
     if (!interaction.isChatInputCommand()) return;
@@ -206,6 +250,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     await command.execute(interaction);
+
+    if (interaction.commandName !== "sticky") {
+      setTimeout(() => {
+        refreshSticky(interaction.channel);
+      }, 1000);
+    }
   } catch (error) {
     console.error("❌ Interaction error:", error);
 
@@ -271,7 +321,6 @@ async function handleScan(message, input) {
 
 // ================= MESSAGE LISTENER =================
 const processedMessages = new Set();
-const stickyCooldowns = new Map();
 
 client.on(Events.MessageCreate, async (message) => {
   try {
@@ -318,43 +367,20 @@ client.on(Events.MessageCreate, async (message) => {
       processedMessages.add(message.id);
       setTimeout(() => processedMessages.delete(message.id), 10000);
 
-      return handleScan(message, gamePassId);
+      await handleScan(message, gamePassId);
+
+      setTimeout(() => {
+        refreshSticky(message.channel);
+      }, 1000);
+
+      return;
     }
 
     // =========================
     // STICKY FEATURE
+    // Works for normal text messages and user embed/link messages
     // =========================
-    const stickyData = loadStickyData();
-    const sticky = stickyData[message.channel.id];
-
-    if (!sticky) return;
-    if (message.id === sticky.messageId) return;
-
-    const now = Date.now();
-    const lastStickyTime = stickyCooldowns.get(message.channel.id) || 0;
-
-    if (now - lastStickyTime < 3000) return;
-    stickyCooldowns.set(message.channel.id, now);
-
-    try {
-      if (sticky.messageId) {
-        try {
-          const oldSticky = await message.channel.messages.fetch(sticky.messageId);
-          await oldSticky.delete().catch(() => {});
-        } catch {
-          // ignore if old sticky is already missing
-        }
-      }
-
-      const newSticky = await message.channel.send({
-        content: sticky.content,
-      });
-
-      stickyData[message.channel.id].messageId = newSticky.id;
-      saveStickyData(stickyData);
-    } catch (error) {
-      console.error("❌ Sticky message error:", error);
-    }
+    await refreshSticky(message.channel);
   } catch (err) {
     console.error("❌ messageCreate handler crashed:", err);
   }
