@@ -361,7 +361,7 @@ if (mathMatch) {
   // trim floating point noise (e.g. 33/2 shouldn't show extra decimals)
   result = Math.round(result * 10000) / 10000;
 
-  await message.reply(`🧮 **${a} ${operator} ${b} = ${result}**`);
+  await message.reply(` **${a} ${operator} ${b} = ${result}**`);
 
   setTimeout(() => {
     refreshSticky(message.channel);
