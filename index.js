@@ -327,6 +327,50 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
 
     // =========================
+// MATH FEATURE
+// =========================
+const mathMatch = message.content
+  .trim()
+  .match(/^amaya\s+(-?\d+(?:\.\d+)?)\s*([+\-*/])\s*(-?\d+(?:\.\d+)?)$/i);
+
+if (mathMatch) {
+  const [, aStr, operator, bStr] = mathMatch;
+  const a = parseFloat(aStr);
+  const b = parseFloat(bStr);
+  let result;
+
+  switch (operator) {
+    case "+":
+      result = a + b;
+      break;
+    case "-":
+      result = a - b;
+      break;
+    case "*":
+      result = a * b;
+      break;
+    case "/":
+      if (b === 0) {
+        await message.reply("❌ Can't divide by zero.");
+        return;
+      }
+      result = a / b;
+      break;
+  }
+
+  // trim floating point noise (e.g. 33/2 shouldn't show extra decimals)
+  result = Math.round(result * 10000) / 10000;
+
+  await message.reply(`🧮 **${a} ${operator} ${b} = ${result}**`);
+
+  setTimeout(() => {
+    refreshSticky(message.channel);
+  }, 1000);
+
+  return;
+}
+
+    // =========================
     // SCAN FEATURE
     // =========================
     let scanInput = null;
